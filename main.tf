@@ -119,7 +119,7 @@ module "ec2-private" {
   source         = "terraform-aws-modules/ec2-instance/aws"
   version        = "~> 2.0"
   name           = "secret-servers"
-  instance_count = 1
+  instance_count = 3
 
   ami                    = data.aws_ami.ubuntu20-latest.id
   instance_type          = "t2.micro"
@@ -147,7 +147,7 @@ module "db" {
 
   name     = "demo"
   username = "ldms"
-  password = "Tes+0pts"
+  password = var.db-password
   port     = "3306"
 
   iam_database_authentication_enabled = false
@@ -156,6 +156,9 @@ module "db" {
 
   maintenance_window = "Mon:00:00-Mon:03:00"
   backup_window      = "03:00-06:00"
+  backup_retention_period = 7
+  skip_final_snapshot     = true
+  deletion_protection     = false
 
   monitoring_interval    = "30"
   monitoring_role_name   = "MyRDSMonitoringRole"
@@ -169,7 +172,6 @@ module "db" {
   }
 
   subnet_ids          = module.vpc.database_subnets
-  deletion_protection = false
 }
 
 module "elb" {
