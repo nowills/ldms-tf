@@ -31,7 +31,7 @@ data "aws_ami" "ubuntu20-latest" {
 }
 
 resource "aws_key_pair" "ssh-pub" {
-  key_name   = "nowills-popos"
+  key_name   = "workstation-key"
   public_key = file("~/.ssh/id_rsa.pub")
 }
 
@@ -70,7 +70,7 @@ module "sg-web" {
   ]
 }
 
-module "sg-bastion" {
+module "sg-private" {
   source      = "terraform-aws-modules/security-group/aws"
   name        = "private-subnet-access"
   description = "Security group allowing access for SSH to AWS jump server from workstation IP - replacing what would be a site to site VPN connection"
@@ -104,7 +104,7 @@ module "ec2-web" {
 
   ami                    = data.aws_ami.ubuntu20-latest.id
   instance_type          = "t2.micro"
-  key_name               = "nowills-popos"
+  key_name               = "workstation-key"
   monitoring             = true
   vpc_security_group_ids = [module.sg-web.security_group_id]
   subnet_ids             = module.vpc.public_subnets
@@ -115,17 +115,17 @@ module "ec2-web" {
   }
 }
 
-module "ec2-bastion" {
+module "ec2-private" {
   source         = "terraform-aws-modules/ec2-instance/aws"
   version        = "~> 2.0"
-  name           = "bastion-server"
+  name           = "secret-servers"
   instance_count = 1
 
   ami                    = data.aws_ami.ubuntu20-latest.id
   instance_type          = "t2.micro"
-  key_name               = "nowills-popos"
+  key_name               = "workstation-key"
   monitoring             = true
-  vpc_security_group_ids = [module.sg-bastion.security_group_id]
+  vpc_security_group_ids = [module.sg-private.security_group_id]
   subnet_ids             = module.vpc.private_subnets
 
   tags = {
