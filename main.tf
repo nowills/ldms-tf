@@ -16,14 +16,11 @@ data "http" "myip" {
 
 data "aws_ami" "ubuntu20-latest" {
   most_recent = true
-
   owners = ["099720109477"]
-
   filter {
     name   = "name"
     values = ["ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-*"]
   }
-
   filter {
     name   = "virtualization-type"
     values = ["hvm"]
@@ -64,7 +61,25 @@ module "sg-web" {
   vpc_id      = module.vpc.vpc_id
   ingress_with_cidr_blocks = [
     {
+      rule        = "http-80-tcp"
+      cidr_blocks = join(",", module.vpc.public_subnets_cidr_blocks)
+    },
+    {
+      rule        = "http-80-tcp"
+      cidr_blocks = "0.0.0.0/0"
+    },
+    {
       rule        = "https-443-tcp"
+      cidr_blocks = "0.0.0.0/0"
+    },
+    {
+      rule        = "ssh-tcp"
+      cidr_blocks = "${chomp(data.http.myip.body)}/32"
+    },
+  ]
+  egress_with_cidr_blocks = [
+    {
+      rule        = "all-all"
       cidr_blocks = "0.0.0.0/0"
     },
   ]
@@ -80,6 +95,14 @@ module "sg-private" {
       rule        = "ssh-tcp"
       cidr_blocks = "${chomp(data.http.myip.body)}/32"
     },
+    {
+      rule        = "mysql-tcp"
+      cidr_blocks = join(",", module.vpc.private_subnets_cidr_blocks)
+    },
+    {
+      rule        = "mysql-tcp"
+      cidr_blocks = join(",", module.vpc.public_subnets_cidr_blocks)
+    },
   ]
 }
 
@@ -93,6 +116,10 @@ module "sg-database" {
       rule        = "mysql-tcp"
       cidr_blocks = join(",", module.vpc.private_subnets_cidr_blocks)
     },
+    {
+      rule        = "mysql-tcp"
+      cidr_blocks = join(",", module.vpc.public_subnets_cidr_blocks)
+    },
   ]
 }
 
@@ -100,10 +127,10 @@ module "ec2-web" {
   source         = "terraform-aws-modules/ec2-instance/aws"
   version        = "~> 2.0"
   name           = "web-servers"
-  instance_count = 3
+  instance_count = var.no_of_webinstance
 
   ami                    = data.aws_ami.ubuntu20-latest.id
-  instance_type          = "t2.micro"
+  instance_type          = "t2.small"
   key_name               = "workstation-key"
   monitoring             = true
   vpc_security_group_ids = [module.sg-web.security_group_id]
@@ -111,7 +138,7 @@ module "ec2-web" {
 
   tags = {
     Terraform   = "true"
-    Environment = "dev"
+    Environment = "web"
   }
 }
 
@@ -130,7 +157,7 @@ module "ec2-private" {
 
   tags = {
     Terraform   = "true"
-    Environment = "dev"
+    Environment = "private"
   }
 }
 
@@ -140,16 +167,18 @@ module "db" {
 
   identifier = "ldms-demodb"
 
-  engine            = "mariadb"
-  engine_version    = "10.5.8"
-  instance_class    = "db.t2.micro"
+  engine            = "mysql"
+  engine_version    = "8.0.20"
+  instance_class    = "db.t2.small"
   allocated_storage = 5
 
-  name     = "demo"
-  username = "ldms"
+  publicly_accessible    = false
+  name     = "cpx000db"
+  username = "rack"
   password = var.db-password
   port     = "3306"
-
+  multi_az = true
+  storage_encrypted = true
   iam_database_authentication_enabled = false
 
   vpc_security_group_ids = [module.sg-database.security_group_id]
@@ -162,8 +191,8 @@ module "db" {
 
   monitoring_interval    = "30"
   monitoring_role_name   = "MyRDSMonitoringRole"
-  family                 = "mariadb10.5"
-  major_engine_version   = "10.5"
+  family                 = "mysql8.0"
+  major_engine_version   = "8.0"
   create_monitoring_role = true
 
   tags = {
@@ -174,51 +203,73 @@ module "db" {
   subnet_ids          = module.vpc.database_subnets
 }
 
-module "elb" {
-  source = "terraform-aws-modules/elb/aws"
+module "alb" {
+  source  = "terraform-aws-modules/alb/aws"
+  version = "~> 6.0"
 
-  name = "elb-ldms-demo"
+  name = "my-alb"
 
+  load_balancer_type = "application"
+
+  vpc_id             = module.vpc.vpc_id
   subnets         = module.vpc.public_subnets
   security_groups = [module.sg-web.security_group_id]
-  internal        = false
 
-  listener = [
+#  access_logs = {
+#    bucket = "my-alb-logs"
+#  }
+
+  target_groups = [
     {
-      instance_port      = "8080"
-      instance_protocol  = "https"
-      lb_port            = "443"
-      lb_protocol        = "https"
-      ssl_certificate_id = module.acm.acm_certificate_arn
-    },
+      name_prefix      = "pref-"
+      backend_protocol = "HTTP"
+      backend_port     = 80
+      target_type      = "instance"
+      targets = [
+        {
+          target_id = module.ec2-web.id[0]
+          port = 80
+        },
+        {
+          target_id = module.ec2-web.id[1]
+          port = 80
+        },
+        {
+          target_id = module.ec2-web.id[2]
+          port = 80
+        },
+      ]
+      stickiness = {
+        enabled = true
+        type = "lb_cookie"
+      }
+    }
+  ]
+  https_listeners = [
     {
-      instance_port     = "80"
-      instance_protocol = "http"
-      lb_port           = "80"
-      lb_protocol       = "http"
-    },
+      port               = 443
+      protocol           = "HTTPS"
+      certificate_arn    = module.acm.acm_certificate_arn
+      target_group_index = 0
+    }
   ]
 
-  health_check = {
-    target              = "HTTP:8080/"
-    interval            = 30
-    healthy_threshold   = 2
-    unhealthy_threshold = 2
-    timeout             = 5
-  }
-
-  #access_logs = {
-  #  bucket = aws_s3_bucket.logs.id
-  #}
+  http_tcp_listeners = [
+    {
+      port               = 80
+      protocol           = "HTTP"
+      action_type = "redirect"
+      redirect = {
+        port        = "443"
+        protocol    = "HTTPS"
+        status_code = "HTTP_301"
+      }    
+    }
+  ]
 
   tags = {
-    Owner       = "user"
-    Environment = "dev"
+    Environment = "Test"
   }
-
-  # ELB attachments
-  #number_of_instances = var.number_of_instances
-  instances = module.ec2-web.id
 }
 
 resource "aws_route53_record" "www-aws" {
@@ -226,7 +277,15 @@ resource "aws_route53_record" "www-aws" {
   name    = "aws.${data.aws_route53_zone.public.name}"
   type    = "CNAME"
   ttl     = 300
-  records = [module.elb.elb_dns_name]
+  records = [module.alb.lb_dns_name]
+}
+
+resource "aws_route53_record" "rds-aws" {
+  zone_id = data.aws_route53_zone.public.zone_id
+  name    = "rds.${data.aws_route53_zone.public.name}"
+  type    = "CNAME"
+  ttl     = 300
+  records = [module.db.db_instance_address]
 }
 
 module "acm" {
@@ -245,3 +304,13 @@ module "acm" {
   }
 }
 
+
+output "web-app-dns" {
+  value = aws_route53_record.www-aws.fqdn
+}
+output "rds-db-dns" {
+  value = aws_route53_record.rds-aws.fqdn
+}
+output "rds-db-name" {
+  value = module.db.db_instance_address
+}
