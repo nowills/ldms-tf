@@ -16,7 +16,7 @@ data "http" "myip" {
 
 data "aws_ami" "ubuntu20-latest" {
   most_recent = true
-  owners = ["099720109477"]
+  owners      = ["099720109477"]
   filter {
     name   = "name"
     values = ["ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-*"]
@@ -88,12 +88,12 @@ module "sg-web" {
 module "sg-private" {
   source      = "terraform-aws-modules/security-group/aws"
   name        = "private-subnet-access"
-  description = "Security group allowing access for SSH to AWS jump server from workstation IP - replacing what would be a site to site VPN connection"
+  description = "Security group allowing access for SSH adn Mysql from web subnet"
   vpc_id      = module.vpc.vpc_id
   ingress_with_cidr_blocks = [
     {
       rule        = "ssh-tcp"
-      cidr_blocks = "${chomp(data.http.myip.body)}/32"
+      cidr_blocks = join(",", module.vpc.public_subnets_cidr_blocks)
     },
     {
       rule        = "mysql-tcp"
@@ -172,19 +172,19 @@ module "db" {
   instance_class    = "db.t2.small"
   allocated_storage = 5
 
-  publicly_accessible    = false
-  name     = "cpx000db"
-  username = "rack"
-  password = var.db-password
-  port     = "3306"
-  multi_az = true
-  storage_encrypted = true
+  publicly_accessible                 = false
+  name                                = "cpx000db"
+  username                            = "rack"
+  password                            = var.db-password
+  port                                = "3306"
+  multi_az                            = true
+  storage_encrypted                   = true
   iam_database_authentication_enabled = false
 
   vpc_security_group_ids = [module.sg-database.security_group_id]
 
-  maintenance_window = "Mon:00:00-Mon:03:00"
-  backup_window      = "03:00-06:00"
+  maintenance_window      = "Mon:00:00-Mon:03:00"
+  backup_window           = "03:00-06:00"
   backup_retention_period = 7
   skip_final_snapshot     = true
   deletion_protection     = false
@@ -200,7 +200,7 @@ module "db" {
     Environment = "dev"
   }
 
-  subnet_ids          = module.vpc.database_subnets
+  subnet_ids = module.vpc.database_subnets
 }
 
 module "alb" {
@@ -211,13 +211,13 @@ module "alb" {
 
   load_balancer_type = "application"
 
-  vpc_id             = module.vpc.vpc_id
+  vpc_id          = module.vpc.vpc_id
   subnets         = module.vpc.public_subnets
   security_groups = [module.sg-web.security_group_id]
 
-#  access_logs = {
-#    bucket = "my-alb-logs"
-#  }
+  #  access_logs = {
+  #    bucket = "my-alb-logs"
+  #  }
 
   target_groups = [
     {
@@ -228,20 +228,20 @@ module "alb" {
       targets = [
         {
           target_id = module.ec2-web.id[0]
-          port = 80
+          port      = 80
         },
         {
           target_id = module.ec2-web.id[1]
-          port = 80
+          port      = 80
         },
         {
           target_id = module.ec2-web.id[2]
-          port = 80
+          port      = 80
         },
       ]
       stickiness = {
         enabled = true
-        type = "lb_cookie"
+        type    = "lb_cookie"
       }
     }
   ]
@@ -256,14 +256,14 @@ module "alb" {
 
   http_tcp_listeners = [
     {
-      port               = 80
-      protocol           = "HTTP"
+      port        = 80
+      protocol    = "HTTP"
       action_type = "redirect"
       redirect = {
         port        = "443"
         protocol    = "HTTPS"
         status_code = "HTTP_301"
-      }    
+      }
     }
   ]
 

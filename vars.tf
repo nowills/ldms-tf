@@ -1,8 +1,8 @@
 variable "db-password" {
-  type = string
+  type        = string
   description = "Set the password for RDS instance"
 }
 variable "no_of_webinstance" {
-  type = number
+  type        = number
   description = "Set number of web facing instances"
 }
